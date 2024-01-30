@@ -1,3 +1,4 @@
+#include "glm/ext/matrix_clip_space.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <glad/gl.h>
@@ -15,17 +16,15 @@
 
 typedef struct Camera
 {
-        const float fov = 70.0f;
+        const float near = 0.01,far = 100;
+        const float fov = 70.0f,sensitivity = 0.05f;
+        glm::vec2 resolution;
         float speed = 0.25f;
-        const float sensitivity = 0.05f;
-        float yaw=90.f,pitch;
-        glm::vec3 position = glm::vec3(0.0f,0.0f,-1.0f);
-        glm::vec3 direction;
-        glm::vec3 front;
-        glm::vec3 up;
-        glm::vec3 right;
+        float yaw=0.0f, pitch=0.0f, roll=0.0f;
+        glm::vec3 position = glm::vec3(0.0f,0.0f,-3.0f);
+        glm::vec3 direction, front, up, right;
         glm::mat4 view = glm::mat4(1.0f);
-        glm::mat4 projection;
+        glm::mat4 projection = glm::mat4(1.0f);
 }Camera;
 
 
@@ -57,6 +56,10 @@ int read_file(const char * path, char** out)
         return 0;
 }
 
+int write_file(const char *)
+{
+        return 0;
+}
 
 void set_shader_value_float(const char * loc, float value, unsigned int shader_program)
 {
@@ -75,6 +78,16 @@ void set_shader_value_vec2(const char * loc, glm::vec2 value, unsigned int shade
                 return;//printf("Unable to locate uniform %s in shader %d\n",loc,shader_program);
         else
                 glUniform2f(location, value.x, value.y);
+}
+
+
+void set_shader_value_vec3(const char * loc, glm::vec3 value, unsigned int shader_program)
+{
+        int location = glGetUniformLocation(shader_program, loc);
+        if (location == -1)
+                return;
+        else
+                glUniform3f(location, value.x, value.y, value.z);
 }
 
 
@@ -194,7 +207,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 struct Camera camera;
 
 
-void camera_process(struct Camera* camera)
+void camera_process(GLFWwindow* window, struct Camera* camera)
 {
         camera->front = glm::normalize(camera->direction);
 
@@ -202,6 +215,13 @@ void camera_process(struct Camera* camera)
         camera->up = glm::cross(camera->direction, camera->right);
 
         camera->view = glm::lookAt(camera->position, camera->position+camera->front, camera->up);
+        
+        int w,h;
+        glfwGetWindowSize(window, &w,&h);
+        glm::vec2 resolution = glm::vec2(w,h);
+        camera->resolution = resolution;
+
+        camera->projection = glm::perspective(glm::radians(camera->fov), (float)w/h, camera->near, camera->far);
 }
 
 
@@ -251,13 +271,19 @@ void input_process(GLFWwindow* window, struct Camera* camera, float frame_delta)
         if(glfwGetKey(window, GLFW_KEY_D))
                 camera->position += glm::normalize(glm::cross(camera->front, camera->up)) * camera->speed * frame_delta;
         if(glfwGetKey(window, GLFW_KEY_LEFT_SHIFT))
-                camera->position -= glm::vec3(0.0,1.0,0.0) * camera->speed * frame_delta;
+                camera->position -= camera->up * camera->speed * frame_delta;
         if(glfwGetKey(window, GLFW_KEY_SPACE))
-                camera->position += glm::vec3(0.0,1.0,0.0) * camera->speed * frame_delta;
+                camera->position += camera->up * camera->speed * frame_delta;
         if(glfwGetKey(window, GLFW_KEY_LEFT_CONTROL))
-                camera->speed = 2.0;
+                camera->speed = 2.0f;
         else
                 camera->speed = 1.0f;
+}
+
+
+void chunk_texture(unsigned int * texture_id, int* texture_size, int width, int height, int depth)
+{
+        printf("%d %d %d\n",width, height, depth);
 }
 
 
@@ -320,8 +346,8 @@ int main(int argc, char* argv[])
         if (shader == -1 || shader == 0)
             return -1;
 
-        int size = 10;
-        int chunk_data_size = size*size*size;
+        int lattice_width=10,lattice_height=5,lattice_depth=10;
+        int chunk_data_size = lattice_width*lattice_height*lattice_depth;
         printf("chunk data size: %d\n",chunk_data_size);
         int* chunk_data = (int*) malloc(chunk_data_size*sizeof(int));
         printf("size of chunk_data: %zu\n",chunk_data_size*sizeof(int));
@@ -331,24 +357,33 @@ int main(int argc, char* argv[])
                 *(chunk_data+i) = rand()%2;
         }
 
+        unsigned int texture;
+        int texture_size;
+        chunk_texture(&texture, &texture_size, lattice_width, lattice_height, lattice_depth);
 
-        double previous_frame_time,current_frame_time,frame_delta = 0.0f;
+        glBindTexture(GL_TEXTURE_3D, texture);
+
+        double previous_frame_time,current_frame_time,fps_frame_delta = 0.0f;
         unsigned int frame_count = 0;
 
-        glfwSwapInterval(0);
+        double previous_time = 0.0f;
+
+        //glfwSwapInterval(0);
 
         printf("vao: %d vbo: %d shader: %d vbo_size: %zu\n",vao,vbo,shader,vbo_size);
+
+        glm::vec3 sun_light = glm::vec3(0.0f,5.0f,6.0f);
 
         while(!glfwWindowShouldClose(window))
         {
                 // calculate FPS
                 current_frame_time = glfwGetTime();
-                frame_delta = current_frame_time - previous_frame_time;
+                fps_frame_delta = current_frame_time - previous_frame_time;
                 frame_count++;
-                if (frame_delta >= 1.0 / 30.0)
+                if (fps_frame_delta >= 1.0 / 30.0)
                 {
-                        char title[30];
-                        sprintf(title, "time: %f fps: %f", (frame_delta/frame_count) * 1000, (1.0f/frame_delta) * frame_count);
+                        char title[74];
+                        sprintf(title, "time: %f fps: %f yaw: %f pitch: %f roll: %f", (fps_frame_delta/frame_count) * 1000, (1.0f/fps_frame_delta) * frame_count, camera.yaw, camera.pitch, camera.roll);
                         glfwSetWindowTitle(window, title);
                         previous_frame_time = current_frame_time;
                         frame_count = 0;
@@ -356,12 +391,31 @@ int main(int argc, char* argv[])
                 
                 glClearColor(0.4f,0.5f,0.6f,1.0f);
 		        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-                
-                input_process(window, &camera, frame_delta);
 
-                //camera_process(&camera);
+                input_process(window, &camera, glfwGetTime()-previous_time);
+
+                previous_time = glfwGetTime();
+
+                camera_process(window, &camera);
 
                 glUseProgram(shader);
+                
+                set_shader_value_float("TIME", glfwGetTime(), shader);
+                set_shader_value_vec2("RESOLUTION", camera.resolution, shader);
+
+                set_shader_value_vec3("light", sun_light, shader);
+                
+                set_shader_value_float("yaw", glm::radians(camera.yaw), shader);
+                set_shader_value_float("pitch", glm::radians(camera.pitch), shader);
+                set_shader_value_float("roll", glm::radians(camera.roll), shader);
+                set_shader_value_vec3("camera_front", camera.front, shader);
+                set_shader_value_vec3("camera_up", camera.up, shader);
+                set_shader_value_vec3("camera_right", camera.right, shader);
+                set_shader_value_vec3("camera_position", camera.position, shader);
+                set_shader_value_float("fov", glm::radians(camera.fov), shader);
+                set_shader_value_float("near", camera.near, shader);
+                set_shader_value_float("far", camera.far, shader);
+                
                 glBindVertexArray(vao);
                 glDrawArrays(GL_TRIANGLES, 0, vbo_size);
                 

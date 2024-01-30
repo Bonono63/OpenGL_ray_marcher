@@ -2,3 +2,5 @@
 .clangd
 bin
 .vscode
+glfw
+glm
